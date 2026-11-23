@@ -311,10 +311,15 @@ class TransformerForCausalLM(nn.Module):
         state = checkpoint.load_sharded_pipelined(self.tp_group.rank_in_group, self.tp_group.world_size, self,
                                                   self.hf_weight_mappings(), torch.device("cpu")).state_dict
         params = dict(self.named_parameters(remove_duplicate=False))
+        # checked before the first copy, so a bad checkpoint leaves the served weights untouched
         unknown = sorted(set(state) - set(params))
         if unknown:
             raise RuntimeError(f"the checkpoint loaded {len(unknown)} tensor(s) the graph has no parameter for: "
                                f"{unknown[:8]}")
+        mismatched = [name for name, tensor in state.items() if tensor.shape != params[name].shape]
+        if mismatched:
+            raise RuntimeError(f"{len(mismatched)} checkpoint tensor(s) do not match their parameter's shape: "
+                               f"{[(n, tuple(state[n].shape), tuple(params[n].shape)) for n in mismatched[:4]]}")
         with torch.no_grad():
             for name, tensor in state.items():
                 params[name].copy_(tensor)
